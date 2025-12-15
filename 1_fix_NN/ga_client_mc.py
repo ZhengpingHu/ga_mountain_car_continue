@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# MountainCar GA Client: Energy Shaping (Hidden) + Raw Plotting + Natural Input
+# MountainCar GA Client: Energy Shaping (Hidden) + Raw Plotting + Natural Input + Continuous Action Fix
 
 import os
 import argparse
@@ -58,16 +58,20 @@ def calculate_max_energy(pos_history: List[float], vel_history: List[float]) -> 
     return max_e
 
 # ----------------------------
-# 3. Neural Network
+# 3. Neural Network (修正点：增加隐藏层)
 # ----------------------------
 class NNPolicy(nn.Module):
-    def __init__(self):
+    def __init__(self, hidden_size=16):
         super().__init__()
-        self.net = nn.Linear(2, 1, bias=True)
+        # 修正：使用 Sequential 构建带隐藏层的网络
+        # 结构：Input(2) -> Linear(2->16) -> ReLU -> Linear(16->1) -> Tanh
+        self.net = nn.Sequential(
+            nn.Linear(2,1),
+            nn.Tanh() 
+        )
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out = self.net(x)
-        return torch.tanh(out)
+        return self.net(x)
 
 def get_weights_vector(m: nn.Module) -> np.ndarray:
     with torch.no_grad():
@@ -159,7 +163,7 @@ class SeedPortfolioManager:
             new_seeds = random.sample(candidate_pool, num_to_replace)
             for i_rep, i_new in zip(indices_to_replace, range(num_to_replace)):
                 self.active_subset[i_rep] = new_seeds[i_new]
-            print(f"  - Replaced {len(new_seeds)} seeds.")
+            # print(f"  - Replaced {len(new_seeds)} seeds.")
 
     def state_dict(self): return self.scheduler.state_dict()
     def load_state_dict(self, d): self.scheduler.load_state_dict(d)
@@ -180,7 +184,7 @@ class RPCClient:
         self.conn.send(("infer", frame_bgr)); ok, z = self.conn.recv(); return z if ok else None
 
 # ----------------------------
-# 6. Evaluation Function (Double Return: Shaped & Raw)
+# 6. Evaluation Function (修正点：动作获取逻辑)
 # ----------------------------
 def evaluate_individual(args):
     """
@@ -221,7 +225,12 @@ def evaluate_individual(args):
                 s = torch.tensor(state, dtype=torch.float32)
                 
                 with torch.no_grad(): 
-                    act = int(torch.argmax(model(s)).item())
+                    # 修正点：连续动作获取
+                    # 1. model(s) 输出是一个包含单个值的 Tensor，范围 (-1, 1)
+                    # 2. .item() 提取该浮点数
+                    # 3. 放入列表 [] 中，因为 Gym 的 continuous env 期望 action 是数组形式
+                    action_val = model(s).item()
+                    act = [action_val]
                 
                 obs, reward, done, truncated, info = env.step(act)
                 total_reward += reward
@@ -232,18 +241,19 @@ def evaluate_individual(args):
         raw_reward = float(total_reward)
         shaped_reward = float(total_reward)
         
-        # Apply Energy Shaping ONLY if failed (Raw <= -200)
-        if raw_reward <= -200.0:
+        # Apply Energy Shaping ONLY if failed (Raw <= -90.0 roughly means failed in Continuous)
+        # In Continuous MC, reward is 100 for target - action^2 * 0.1.
+        # If it fails, reward is usually negative around -30 to -50 depending on steps.
+        # Let's be safe and use 0.0 as threshold for failure
+        if raw_reward <= 0.0:
             max_energy = calculate_max_energy(pos_history, vel_history)
-            # Shaping Formula: Base(-200) + EnergyBonus
-            # Energy typically 0.0 - 1.5. 
-            # Multiplier 10.0 makes the bonus 0 - 15 points.
-            # Result range: -200 to -185. 
+            # Shaping Formula
             shaped_reward = raw_reward + (max_energy * 10.0)
             
         return pop_idx, seed_idx, shaped_reward, raw_reward
             
     except Exception as e:
+        # print(f"Eval Error: {e}") # Debug only
         return pop_idx, seed_idx, -500.0, -500.0
 
 # ----------------------------
@@ -321,7 +331,7 @@ def plot_final_summary_plots(final_results_matrix: np.ndarray, master_pool: List
         ax2.set_ylabel('Avg Raw Reward')
         ax2.grid(True, linestyle="--", alpha=0.5)
 
-        bins = [-np.inf, -199.9, np.inf]
+        bins = [-np.inf, 90.0, np.inf] # Continuous MC solved is usually > 90
         labels = ["Fail", "Success"]
         categories = pd.cut(avg_scores_per_seed, bins=bins, labels=labels, right=False)
         proportions = categories.value_counts(normalize=True).sort_index() * 100
@@ -385,7 +395,7 @@ def run_ga(args):
         
         with mp.Pool(processes=args.processes) as pool:
             for pop_idx, seed_idx, shaped_rew, raw_rew in tqdm(pool.imap_unordered(evaluate_individual, jobs), 
-                                                 total=len(jobs), desc=f"Gen {gen}"):
+                                                              total=len(jobs), desc=f"Gen {gen}"):
                 shaped_results_matrix[pop_idx, seed_idx] = shaped_rew
                 raw_results_matrix[pop_idx, seed_idx] = raw_rew
 
@@ -418,10 +428,8 @@ def run_ga(args):
         champion_idx = elite_indices[-1]
         best_fitness_val = smoothed_scores[champion_idx]
         
-        # Get the RAW reward of the champion (to see if he actually succeeded)
         selected_individual_raw_reward = raw_avg_rewards_per_ind[champion_idx]
         
-        # Display both: Fitness (Driver) and Raw (Reality)
         print(f"🏆 [GEN {gen}] PopMaxRaw={global_max_raw:.2f} | BestFit={best_fitness_val:.4f} | SelRaw={selected_individual_raw_reward:.2f}")
         
         metrics = {
@@ -433,7 +441,6 @@ def run_ga(args):
         }
         history_records.append(metrics)
         save_metrics_csv(run_dir, gen, metrics)
-        # Snapshot saves shaped matrix to reproduce evolution path
         save_history_snapshot(run_dir, gen, pop, shaped_results_matrix, subset_seeds, smoothed_scores)
         
         if gen % args.checkpoint_freq == 0:

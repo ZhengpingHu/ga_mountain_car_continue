@@ -1,0 +1,3 @@
+python yolo_server_mc.py --model ./best.pt --port 6001
+
+python ga_client_mc.py --rpc-port 6001 --population 50 --generations 100 --processes 16 --pool-size 100 --subset-k 5 --seed-refresh-direction bottom
