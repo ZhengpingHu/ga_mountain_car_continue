@@ -1,4 +1,4 @@
-python visualize_mc.py runs_mc/your_linear_run/best_model.npz --hidden-size 0
+python visualize_mc.py ./best_model_full_eval_0.npz --hidden-size 0
 
 
-python visualize_mc.py runs_mc/your_hidden_run/best_model.npz --hidden-size 16
+python visualize_mc.py ./best_model_full_eval_16.npz --hidden-size 16
