@@ -1,0 +1,4 @@
+python visualize_mc.py ./best_model_full_eval_0.npz --hidden-size 0
+
+
+python visualize_mc.py ./best_model_full_eval_16.npz --hidden-size 16

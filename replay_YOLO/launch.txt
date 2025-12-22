@@ -1,0 +1,5 @@
+python yolo_server_mc.py --model ./best.pt --port 6001
+
+python visualize_mc_rpc.py best_model_full_eval_0.npz --hidden-size 0 --port 6001
+
+python visualize_mc_rpc.py runs_mc/your_hidden_run/best_model.npz --hidden-size 16 --port 6001
